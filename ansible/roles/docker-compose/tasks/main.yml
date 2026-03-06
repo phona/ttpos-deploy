@@ -1,0 +1,114 @@
+# Docker Compose Role - Main Tasks
+# ansible/roles/docker-compose/tasks/main.yml
+
+---
+- name: Create deploy directory
+  file:
+    path: "{{ deploy_path }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Create services directory
+  file:
+    path: "{{ services_dir }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Ensure Docker network exists
+  docker_network:
+    name: "{{ docker_network_name }}"
+    driver: bridge
+    state: present
+  when: docker_network_external | bool
+
+- name: Load environment variables
+  include_vars:
+    file: "{{ env_file }}"
+    name: env_vars
+  when: env_file is defined
+
+- name: Set image tag for deployment
+  set_fact:
+    deploy_tag: "{{ compose_tag }}"
+    deploy_env: "{{ compose_env }}"
+
+- name: Build compose files list
+  set_fact:
+    compose_files: "{{ compose_files_result.files }}"
+  vars:
+    compose_files_result:
+      files:
+        - "{{ services_dir }}/{{ compose_service }}/compose.yml"
+        - "{{ services_dir }}/{{ compose_service }}/compose.{{ compose_env }}.yml"
+  when: compose_service != 'all'
+
+- name: Deploy all services
+  block:
+    - name: Deploy each service
+      include_tasks: deploy-single-service.yml
+      loop: "{{ all_services }}"
+      loop_control:
+        loop_var: current_service
+  when: compose_service == 'all'
+
+- name: Deploy single service
+  block:
+    - name: Pull docker images
+      command: >
+        docker compose -f {{ services_dir }}/{{ compose_service }}/compose.yml
+        {% if compose_env != 'local' %}-f {{ services_dir }}/{{ compose_service }}/compose.{{ compose_env }}.yml{% endif %}
+        pull
+      args:
+        chdir: "{{ deploy_path }}"
+      when: compose_pull | bool
+      changed_when: true
+
+    - name: Start services with docker compose
+      command: >
+        docker compose -f {{ services_dir }}/{{ compose_service }}/compose.yml
+        {% if compose_env != 'local' %}-f {{ services_dir }}/{{ compose_service }}/compose.{{ compose_env }}.yml{% endif %}
+        up -d
+        {% if compose_remove_orphans %}--remove-orphans{% endif %}
+      args:
+        chdir: "{{ deploy_path }}"
+      environment:
+        IMAGE_TAG: "{{ deploy_tag }}"
+        ENV: "{{ deploy_env }}"
+        ENV_FILE: "{{ env_file }}"
+        IMAGE_REGISTRY: "{{ image_registry }}"
+      changed_when: true
+
+    - name: Wait for service to be healthy
+      shell: |
+        docker compose -f {{ services_dir }}/{{ compose_service }}/compose.yml
+        {% if compose_env != 'local' %}-f {{ services_dir }}/{{ compose_service }}/compose.{{ compose_env }}.yml{% endif %}
+        ps --format json | jq -r '.[] | select(.Service == "{{ compose_service }}") | .Health'
+      args:
+        chdir: "{{ deploy_path }}"
+      register: health_status
+      until: health_status.stdout == 'healthy' or health_status.rc != 0
+      retries: "{{ health_wait_timeout / health_check_interval }}"
+      delay: "{{ health_check_interval }}"
+      changed_when: false
+      ignore_errors: yes
+  when: compose_service != 'all'
+
+- name: Get service status
+  shell: |
+    docker compose -f {{ services_dir }}/{{ compose_service }}/compose.yml
+    {% if compose_env != 'local' %}-f {{ services_dir }}/{{ compose_service }}/compose.{{ compose_env }}.yml{% endif %}
+    ps --format json
+  args:
+    chdir: "{{ deploy_path }}"
+  register: service_status
+  changed_when: false
+  when: compose_service != 'all'
+
+- name: Display service status
+  debug:
+    msg: "Service {{ compose_service }} status: {{ service_status.stdout | from_json }}"
+  when: compose_service != 'all' and service_status.stdout != ''

@@ -1,0 +1,43 @@
+# Health Check Role - Main Tasks
+# ansible/roles/health-check/tasks/main.yml
+
+---
+- name: Set health check configuration
+  set_fact:
+    health_timeout: "{{ health_timeout | default(30) }}"
+    health_retries: "{{ health_retries | default(3) }}"
+    health_interval: "{{ health_interval | default(10) }}"
+
+- name: Check service health via HTTP
+  uri:
+    url: "{{ health_url }}"
+    method: GET
+    status_code: 200
+    timeout: "{{ health_timeout }}"
+  register: health_result
+  retries: "{{ health_retries }}"
+  delay: "{{ health_interval }}"
+  until: health_result.status == 200
+  ignore_errors: yes
+
+- name: Set health status
+  set_fact:
+    service_healthy: "{{ health_result.status == 200 }}"
+
+- name: Health check passed
+  debug:
+    msg: "Health check PASSED for {{ health_url }}"
+  when: service_healthy | bool
+
+- name: Health check failed
+  debug:
+    msg: |
+      Health check FAILED for {{ health_url }}
+      Status: {{ health_result.status | default('unknown') }}
+      Response: {{ health_result.msg | default('no response') }}
+  when: not service_healthy | bool
+
+- name: Fail if health check failed
+  fail:
+    msg: "Health check failed for {{ health_url }}"
+  when: not service_healthy | bool and (fail_on_unhealthy | default(true))

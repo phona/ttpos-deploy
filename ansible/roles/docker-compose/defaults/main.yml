@@ -1,0 +1,80 @@
+# Docker Compose Role - Default Variables
+# ansible/roles/docker-compose/defaults/main.yml
+
+---
+# Compose configuration
+compose_service: "all"
+compose_tag: "latest"
+compose_env: "staging"
+compose_pull: true
+compose_build: false
+compose_detach: true
+compose_remove_orphans: true
+
+# Paths
+deploy_path: "/opt/ttpos/{{ compose_env }}"
+compose_project_dir: "{{ deploy_path }}"
+services_dir: "{{ deploy_path }}/services"
+env_file: "{{ deploy_path }}/environments/{{ compose_env }}/env"
+
+# Git configuration
+git_repo: ""
+git_branch: "main"
+git_force: false
+
+# Timeouts
+compose_timeout: 300
+health_wait_timeout: 120
+health_check_interval: 10
+
+# Docker network
+docker_network_name: "ttpos-{{ compose_env }}"
+docker_network_external: true
+
+# Resource limits (production defaults)
+resource_limits_enabled: false
+resource_cpu_limit: "2"
+resource_memory_limit: "2G"
+resource_cpu_reservation: "500m"
+resource_memory_reservation: "512M"
+
+# Logging
+compose_log_driver: "json-file"
+compose_log_max_size: "50m"
+compose_log_max_file: "10"
+
+# Registry
+image_registry: "registry.example.com/your-org"
+
+# Services list
+all_services:
+  - main
+  - php
+  - bmp-erp
+  - bmp-takeout
+  - bmp-message
+  - bmp-websocket
+  - nginx
+
+# Service-specific ports
+service_ports:
+  main:
+    http: 8080
+  php:
+    fpm: 9000
+  bmp-erp:
+    http: 14020
+    grpc: 14022
+  bmp-takeout:
+    http: 14030
+    grpc: 14032
+  bmp-message:
+    http: 14040
+    grpc: 14042
+  bmp-websocket:
+    http: 14050
+    ws: 14051
+    grpc: 14052
+  nginx:
+    http: 80
+    https: 443

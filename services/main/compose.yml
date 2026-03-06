@@ -1,0 +1,41 @@
+# services/main/compose.yml
+# Base configuration for TTPOS Main Service (Go + Gin)
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - ttpos-network
+
+services:
+  main:
+    <<: *common
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-server-go:${IMAGE_TAG:-latest}
+    container_name: ttpos-main-${ENV:-local}
+    hostname: main
+    env_file:
+      - ${ENV_FILE:-environments/${ENV:-local}/env}
+    environment:
+      - ENV=${ENV:-local}
+      - IMAGE_TAG=${IMAGE_TAG:-latest}
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.ttpos.service=main"
+      - "com.ttpos.version=${IMAGE_TAG:-latest}"
+      - "com.ttpos.environment=${ENV:-local}"
+    networks:
+      - ttpos-network
+
+networks:
+  ttpos-network:
+    name: ttpos-${ENV:-local}
+    external: true

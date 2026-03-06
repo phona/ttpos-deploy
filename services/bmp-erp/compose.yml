@@ -1,0 +1,42 @@
+# services/bmp-erp/compose.yml
+# Base configuration for BMP ERP Microservice
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - ttpos-network
+
+services:
+  bmp-erp:
+    <<: *common
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-erp:${IMAGE_TAG:-latest}
+    container_name: ttpos-bmp-erp-${ENV:-local}
+    hostname: bmp-erp
+    env_file:
+      - ${ENV_FILE:-environments/${ENV:-local}/env}
+    environment:
+      - ENV=${ENV:-local}
+      - IMAGE_TAG=${IMAGE_TAG:-latest}
+      - GRPC_PORT=14022
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.ttpos.service=bmp-erp"
+      - "com.ttpos.version=${IMAGE_TAG:-latest}"
+      - "com.ttpos.environment=${ENV:-local}"
+    networks:
+      - ttpos-network
+
+networks:
+  ttpos-network:
+    name: ttpos-${ENV:-local}
+    external: true

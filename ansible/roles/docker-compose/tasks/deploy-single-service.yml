@@ -1,0 +1,51 @@
+# Deploy Single Service Task
+# ansible/roles/docker-compose/tasks/deploy-single-service.yml
+
+---
+- name: Check if service compose file exists
+  stat:
+    path: "{{ services_dir }}/{{ current_service }}/compose.yml"
+  register: compose_file
+
+- name: Deploy service {{ current_service }}
+  block:
+    - name: Pull docker image for {{ current_service }}
+      command: >
+        docker compose -f {{ services_dir }}/{{ current_service }}/compose.yml
+        {% if compose_env != 'local' %}-f {{ services_dir }}/{{ current_service }}/compose.{{ compose_env }}.yml{% endif %}
+        pull
+      args:
+        chdir: "{{ deploy_path }}"
+      when: compose_pull | bool
+      changed_when: true
+
+    - name: Start {{ current_service }} service
+      command: >
+        docker compose -f {{ services_dir }}/{{ current_service }}/compose.yml
+        {% if compose_env != 'local' %}-f {{ services_dir }}/{{ current_service }}/compose.{{ compose_env }}.yml{% endif %}
+        up -d
+        {% if compose_remove_orphans %}--remove-orphans{% endif %}
+      args:
+        chdir: "{{ deploy_path }}"
+      environment:
+        IMAGE_TAG: "{{ deploy_tag }}"
+        ENV: "{{ deploy_env }}"
+        ENV_FILE: "{{ env_file }}"
+        IMAGE_REGISTRY: "{{ image_registry }}"
+      changed_when: true
+
+    - name: Wait for {{ current_service }} to be healthy
+      shell: |
+        docker ps --filter "name=ttpos-{{ current_service }}-{{ deploy_env }}" \
+        --format '{{ "{{" }} .Status {{ "}}" }}' | grep -o 'healthy' || echo 'starting'
+      register: health_check
+      until: "'healthy' in health_check.stdout"
+      retries: "{{ health_wait_timeout / health_check_interval }}"
+      delay: "{{ health_check_interval }}"
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display {{ current_service }} status
+      debug:
+        msg: "{{ current_service }}: {{ health_check.stdout }}"
+  when: compose_file.stat.exists

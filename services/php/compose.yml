@@ -1,0 +1,48 @@
+# services/php/compose.yml
+# Base configuration for PHP-FPM Service
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - ttpos-network
+
+services:
+  php:
+    <<: *common
+    image: ${PHP_IMAGE:-hitosea2020/php-fpm:1.0.6}
+    container_name: ttpos-php-${ENV:-local}
+    hostname: php
+    env_file:
+      - ${ENV_FILE:-environments/${ENV:-local}/env}
+    environment:
+      - ENV=${ENV:-local}
+    volumes:
+      - php-data:/var/www/html
+      - ./config/php.ini:/usr/local/etc/php/php.ini:ro
+      - ./config/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+      - ./config/supervisor.conf:/etc/supervisor/conf.d/supervisor.conf:ro
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "com.ttpos.service=php"
+      - "com.ttpos.environment=${ENV:-local}"
+    networks:
+      - ttpos-network
+
+volumes:
+  php-data:
+    name: ttpos-php-data-${ENV:-local}
+
+networks:
+  ttpos-network:
+    name: ttpos-${ENV:-local}
+    external: true

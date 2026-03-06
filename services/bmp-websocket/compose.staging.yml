@@ -1,0 +1,26 @@
+# services/bmp-websocket/compose.staging.yml
+# Staging environment overrides for BMP WebSocket Service
+
+services:
+  bmp-websocket:
+    ports:
+      - "${BMP_WEBSOCKET_HTTP_PORT:-14050}:14050"
+      - "${BMP_WEBSOCKET_GRPC_PORT:-14052}:14052"
+      - "${BMP_WEBSOCKET_WS_PORT:-14051}:14051"
+    environment:
+      - GIN_MODE=test
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENABLE_PPROF=${ENABLE_PPROF:-true}
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '250m'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

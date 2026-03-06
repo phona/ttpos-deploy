@@ -1,0 +1,26 @@
+# services/php/compose.staging.yml
+# Staging environment overrides for PHP Service
+
+services:
+  php:
+    ports:
+      - "${PHP_FPM_PORT:-9000}:9000"
+    environment:
+      - PHP_ENV=staging
+      - PHP_DISPLAY_ERRORS=On
+      - PHP_ERROR_REPORTING=E_ALL
+      - XDEBUG_MODE=debug
+      - XDEBUG_CONFIG=client_host=host.docker.internal
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '250m'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

@@ -1,0 +1,38 @@
+# services/bmp-message/compose.prod.yml
+# Production environment overrides for BMP Message Service
+
+services:
+  bmp-message:
+    ports: []
+    environment:
+      - GIN_MODE=release
+      - LOG_LEVEL=${LOG_LEVEL:-warn}
+      - ENABLE_PPROF=false
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '500m'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.ttpos.service=bmp-message"
+      - "com.ttpos.version=${IMAGE_TAG}"
+      - "com.ttpos.environment=production"

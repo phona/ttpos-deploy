@@ -1,0 +1,58 @@
+# Single Service Deployment Playbook
+# ansible/playbooks/deploy-service.yml
+# Use this for deploying a specific service to a specific environment
+
+---
+- name: Deploy Single Service
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    service: "{{ service_name }}"
+    image_tag: "{{ tag | default('latest') }}"
+    environment: "{{ env }}"
+    skip_health_check: "{{ skip_health | default(false) }}"
+
+  pre_tasks:
+    - name: Validate service name
+      assert:
+        that:
+          - service is defined and service != ''
+        fail_msg: "Service name must be specified via 'service_name' variable"
+
+    - name: Validate service exists
+      stat:
+        path: "{{ playbook_dir }}/../services/{{ service }}/compose.yml"
+      delegate_to: localhost
+      register: service_compose
+      failed_when: not service_compose.stat.exists
+
+    - name: Display deployment plan
+      debug:
+        msg: |
+          Deploying Service: {{ service }}
+          Environment: {{ environment }}
+          Image Tag: {{ image_tag }}
+          Host: {{ inventory_hostname }}
+
+  tasks:
+    - name: Include docker-compose role
+      include_role:
+        name: docker-compose
+      vars:
+        compose_service: "{{ service }}"
+        compose_tag: "{{ image_tag }}"
+        compose_env: "{{ environment }}"
+
+    - name: Include health-check role
+      include_role:
+        name: health-check
+      vars:
+        health_url: "{{ health_check_url | default('http://localhost/health') }}"
+        health_service: "{{ service }}"
+      when: not skip_health_check | bool
+
+    - name: Service deployment complete
+      debug:
+        msg: "Service {{ service }} deployed successfully with tag {{ image_tag }}"

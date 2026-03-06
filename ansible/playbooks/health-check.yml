@@ -1,0 +1,122 @@
+# Health Check Playbook
+# ansible/playbooks/health-check.yml
+
+---
+- name: Health Check for TTPOS Services
+  hosts: all
+  become: yes
+  gather_facts: no
+
+  vars:
+    health_timeout: 30
+    health_retries: 3
+    health_interval: 10
+
+  tasks:
+    - name: Check main service health
+      uri:
+        url: "http://localhost:8080/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: main_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: main_health.status == 200
+      ignore_errors: yes
+      when: "'main' in services | default([])"
+
+    - name: Check nginx health
+      uri:
+        url: "http://localhost/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: nginx_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: nginx_health.status == 200
+      ignore_errors: yes
+      when: "'nginx' in services | default([])"
+
+    - name: Check BMP ERP health
+      uri:
+        url: "http://localhost:14020/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: erp_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: erp_health.status == 200
+      ignore_errors: yes
+      when: "'bmp-erp' in services | default([])"
+
+    - name: Check BMP Takeout health
+      uri:
+        url: "http://localhost:14030/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: takeout_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: takeout_health.status == 200
+      ignore_errors: yes
+      when: "'bmp-takeout' in services | default([])"
+
+    - name: Check BMP Message health
+      uri:
+        url: "http://localhost:14040/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: message_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: message_health.status == 200
+      ignore_errors: yes
+      when: "'bmp-message' in services | default([])"
+
+    - name: Check BMP WebSocket health
+      uri:
+        url: "http://localhost:14050/health"
+        method: GET
+        status_code: 200
+        timeout: "{{ health_timeout }}"
+      register: websocket_health
+      retries: "{{ health_retries }}"
+      delay: "{{ health_interval }}"
+      until: websocket_health.status == 200
+      ignore_errors: yes
+      when: "'bmp-websocket' in services | default([])"
+
+    - name: Aggregate health check results
+      set_fact:
+        health_results:
+          main: "{{ main_health.status | default('unknown') }}"
+          nginx: "{{ nginx_health.status | default('unknown') }}"
+          bmp-erp: "{{ erp_health.status | default('unknown') }}"
+          bmp-takeout: "{{ takeout_health.status | default('unknown') }}"
+          bmp-message: "{{ message_health.status | default('unknown') }}"
+          bmp-websocket: "{{ websocket_health.status | default('unknown') }}"
+
+    - name: Display health check results
+      debug:
+        msg: |
+          Health Check Results for {{ inventory_hostname }}:
+          ===================================================
+          {% for service, status in health_results.items() %}
+          {{ service }}: {{ status }}
+          {% endfor %}
+
+    - name: Check for unhealthy services
+      fail:
+        msg: "One or more services are unhealthy on {{ inventory_hostname }}"
+      when: >
+        (main_health.failed | default(false)) or
+        (nginx_health.failed | default(false)) or
+        (erp_health.failed | default(false)) or
+        (takeout_health.failed | default(false)) or
+        (message_health.failed | default(false)) or
+        (websocket_health.failed | default(false))

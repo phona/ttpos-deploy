@@ -1,0 +1,117 @@
+# Production Environment Server Inventory
+# environments/production/inventory.yml
+
+environment: production
+image_registry: registry.example.com/your-org
+default_tag: ""  # Must be explicit
+
+servers:
+  # Primary app server
+  - host: prod-app-1.ttpos.internal
+    user: deploy
+    ssh_port: 22
+    deploy_path: /opt/ttpos/production
+    services:
+      - main
+      - nginx
+    health_check_url: https://ttpos.com/health
+    tags:
+      - app
+      - primary
+    priority: 1
+
+  # Replica app server
+  - host: prod-app-2.ttpos.internal
+    user: deploy
+    ssh_port: 22
+    deploy_path: /opt/ttpos/production
+    services:
+      - main
+      - nginx
+    health_check_url: https://ttpos.com/health
+    tags:
+      - app
+      - replica
+    priority: 2
+
+  # BMP services server
+  - host: prod-bmp.ttpos.internal
+    user: deploy
+    ssh_port: 22
+    deploy_path: /opt/ttpos/production
+    services:
+      - php
+      - bmp-erp
+      - bmp-takeout
+      - bmp-message
+      - bmp-websocket
+    health_check_url: https://bmp.ttpos.internal/health
+    tags:
+      - bmp
+    priority: 3
+
+# Service configuration
+services:
+  main:
+    image: ttpos-server-go
+    health_endpoint: /health
+    http_port: 8080
+    replicas: 2
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  php:
+    image: hitosea2020/php-fpm:1.0.6
+    health_check: php-fpm-status
+    port: 9000
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  bmp-erp:
+    image: ttpos-bmp-erp
+    health_endpoint: /health
+    http_port: 14020
+    grpc_port: 14022
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  bmp-takeout:
+    image: ttpos-bmp-takeout
+    health_endpoint: /health
+    http_port: 14030
+    grpc_port: 14032
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  bmp-message:
+    image: ttpos-bmp-message
+    health_endpoint: /health
+    http_port: 14040
+    grpc_port: 14042
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  bmp-websocket:
+    image: ttpos-bmp-websocket
+    health_endpoint: /health
+    http_port: 14050
+    ws_port: 14051
+    grpc_port: 14052
+    resources:
+      cpu: "2"
+      memory: "2G"
+
+  nginx:
+    image: nginx:alpine
+    health_endpoint: /health
+    http_port: 80
+    https_port: 443
+    replicas: 2
+    resources:
+      cpu: "2"
+      memory: "1G"

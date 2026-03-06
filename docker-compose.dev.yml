@@ -1,0 +1,326 @@
+# docker-compose.dev.yml
+# Full local development stack with all infrastructure services
+# Usage: make dev (or docker compose -f docker-compose.dev.yml up -d)
+
+services:
+  # ===========================================
+  # Infrastructure Services
+  # ===========================================
+
+  mysql:
+    image: mysql:8.0
+    container_name: ttpos-mysql-dev
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ttpos
+      MYSQL_USER: ttpos
+      MYSQL_PASSWORD: ttpos123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ttpos-dev
+
+  redis:
+    image: redis:6.0-alpine
+    container_name: ttpos-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ttpos-dev
+
+  nacos:
+    image: nacos/nacos-server:v2.2.0
+    container_name: ttpos-nacos-dev
+    environment:
+      MODE: standalone
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: mysql
+      MYSQL_SERVICE_PORT: 3306
+      MYSQL_SERVICE_DB_NAME: nacos
+      MYSQL_SERVICE_USER: root
+      MYSQL_SERVICE_PASSWORD: root
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      JVM_XMN: 256m
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ttpos-dev
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.1.0
+    container_name: ttpos-rocketmq-namesrv-dev
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 9876"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ttpos-dev
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.1.0
+    container_name: ttpos-rocketmq-broker-dev
+    command: sh mqbroker -n rocketmq-namesrv:9876
+    ports:
+      - "10911:10911"
+      - "10909:10909"
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    networks:
+      - ttpos-dev
+
+  # ===========================================
+  # Application Services
+  # ===========================================
+
+  main:
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-server-go:${IMAGE_TAG:-latest}
+    container_name: ttpos-main-dev
+    hostname: main
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - NACOS_HOST=nacos
+      - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
+      - BMP_ERP_HOST=bmp-erp
+      - BMP_TAKEOUT_HOST=bmp-takeout
+      - BMP_MESSAGE_HOST=bmp-message
+      - BMP_WEBSOCKET_HOST=bmp-websocket
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ttpos-dev
+
+  php:
+    image: ${PHP_IMAGE:-hitosea2020/php-fpm:1.0.6}
+    container_name: ttpos-php-dev
+    hostname: php
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+    volumes:
+      - php-data:/var/www/html
+      - ./services/php/config/php.ini:/usr/local/etc/php/php.ini:ro
+      - ./services/php/config/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+      - ./services/php/config/supervisor.conf:/etc/supervisor/conf.d/supervisor.conf:ro
+    ports:
+      - "9000:9000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "cgi-fcgi", "-bind", "-connect", "localhost:9000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - ttpos-dev
+
+  nginx:
+    image: nginx:alpine
+    container_name: ttpos-nginx-dev
+    hostname: nginx
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+    volumes:
+      - ./services/nginx/config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./services/nginx/config/conf.d:/etc/nginx/conf.d:ro
+      - nginx-logs:/var/log/nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - main
+      - php
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - ttpos-dev
+
+  bmp-erp:
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-erp:${IMAGE_TAG:-latest}
+    container_name: ttpos-bmp-erp-dev
+    hostname: bmp-erp
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - NACOS_HOST=nacos
+      - GRPC_PORT=14022
+    ports:
+      - "14020:14020"
+      - "14022:14022"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:14022"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ttpos-dev
+
+  bmp-takeout:
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-takeout:${IMAGE_TAG:-latest}
+    container_name: ttpos-bmp-takeout-dev
+    hostname: bmp-takeout
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - NACOS_HOST=nacos
+      - GRPC_PORT=14032
+    ports:
+      - "14030:14030"
+      - "14032:14032"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:14032"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ttpos-dev
+
+  bmp-message:
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-message:${IMAGE_TAG:-latest}
+    container_name: ttpos-bmp-message-dev
+    hostname: bmp-message
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - REDIS_HOST=redis
+      - NACOS_HOST=nacos
+      - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
+      - GRPC_PORT=14042
+    ports:
+      - "14040:14040"
+      - "14042:14042"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rocketmq-namesrv:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:14042"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ttpos-dev
+
+  bmp-websocket:
+    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-websocket:${IMAGE_TAG:-latest}
+    container_name: ttpos-bmp-websocket-dev
+    hostname: bmp-websocket
+    env_file:
+      - .env.dev
+    environment:
+      - ENV=dev
+      - REDIS_HOST=redis
+      - NACOS_HOST=nacos
+      - GRPC_PORT=14052
+    ports:
+      - "14050:14050"
+      - "14051:14051"
+      - "14052:14052"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:14052"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ttpos-dev
+
+volumes:
+  mysql-data:
+    name: ttpos-mysql-data-dev
+  redis-data:
+    name: ttpos-redis-data-dev
+  php-data:
+    name: ttpos-php-data-dev
+  nginx-logs:
+    name: ttpos-nginx-logs-dev
+
+networks:
+  ttpos-dev:
+    name: ttpos-dev
+    driver: bridge

@@ -1,0 +1,187 @@
+name: Deploy
+
+on:
+  # Trigger from other repos (ttpos-server-go)
+  repository_dispatch:
+    types: [deploy-service]
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy'
+        required: true
+        type: choice
+        options:
+          - all
+          - main
+          - php
+          - bmp-erp
+          - bmp-takeout
+          - bmp-message
+          - bmp-websocket
+          - nginx
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: 'staging'
+      image_tag:
+        description: 'Image tag (required for production)'
+        required: false
+      dry_run:
+        description: 'Dry run (show what would happen)'
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: registry.example.com/your-org
+  GIT_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      service: ${{ steps.set.outputs.service }}
+      environment: ${{ steps.set.outputs.environment }}
+      image_tag: ${{ steps.set.outputs.image_tag }}
+
+    steps:
+      - name: Set variables
+        id: set
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            echo "service=${{ github.event.client_payload.service }}" >> $GITHUB_OUTPUT
+            echo "environment=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+            echo "image_tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "service=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate production tag
+        run: |
+          ENV="${{ steps.set.outputs.environment }}"
+          TAG="${{ steps.set.outputs.image_tag }}"
+
+          if [ "$ENV" == "production" ] && [ -z "$TAG" ]; then
+            echo "::error::Production deployments require an explicit image tag"
+            exit 1
+          fi
+
+          echo "Service: ${{ steps.set.outputs.service }}"
+          echo "Environment: ${{ steps.set.outputs.environment }}"
+          echo "Image Tag: ${{ steps.set.outputs.image_tag }}"
+
+  validate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose files
+        run: |
+          SERVICE="${{ needs.prepare.outputs.service }}"
+          ENV="${{ needs.prepare.outputs.environment }}"
+
+          if [ "$SERVICE" == "all" ]; then
+            SERVICES="main php bmp-erp bmp-takeout bmp-message bmp-websocket nginx"
+          else
+            SERVICES="$SERVICE"
+          fi
+
+          for svc in $SERVICES; do
+            if [ -f "services/$svc/compose.yml" ]; then
+              echo "Validating $svc..."
+              docker compose -f "services/$svc/compose.yml" config --quiet
+
+              if [ -f "services/$svc/compose.$ENV.yml" ]; then
+                docker compose -f "services/$svc/compose.yml" -f "services/$svc/compose.$ENV.yml" config --quiet
+              fi
+            fi
+          done
+
+  deploy:
+    needs: [prepare, validate]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq
+
+      - name: Install SOPS
+        run: |
+          curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
+          chmod +x sops-*
+          sudo mv sops-* /usr/local/bin/sops
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_1 }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_2 }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Decrypt secrets
+        if: ${{ secrets.SOPS_AGE_KEY != '' }}
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          chmod +x scripts/decrypt-secrets.sh
+          ./scripts/decrypt-secrets.sh ${{ needs.prepare.outputs.environment }}
+
+      - name: Deploy
+        run: |
+          chmod +x scripts/deploy.sh
+
+          ARGS="-s ${{ needs.prepare.outputs.service }} -e ${{ needs.prepare.outputs.environment }}"
+
+          if [ -n "${{ needs.prepare.outputs.image_tag }}" ]; then
+            ARGS="$ARGS -t ${{ needs.prepare.outputs.image_tag }}"
+          fi
+
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          ./scripts/deploy.sh $ARGS
+
+      - name: Run health check
+        if: success()
+        run: |
+          chmod +x scripts/health-check.sh
+          ./scripts/health-check.sh -s ${{ needs.prepare.outputs.service }} -e ${{ needs.prepare.outputs.environment }}
+
+      - name: Notify success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          chmod +x scripts/notify.sh
+          ./scripts/notify.sh \
+            --status success \
+            --service "${{ needs.prepare.outputs.service }}" \
+            --env "${{ needs.prepare.outputs.environment }}" \
+            --tag "${{ needs.prepare.outputs.image_tag }}" || true
+
+      - name: Notify failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          chmod +x scripts/notify.sh
+          ./scripts/notify.sh \
+            --status failure \
+            --service "${{ needs.prepare.outputs.service }}" \
+            --env "${{ needs.prepare.outputs.environment }}" \
+            --tag "${{ needs.prepare.outputs.image_tag }}" || true

@@ -1,0 +1,71 @@
+# Shared Logging Configuration for TTPOS Services
+# libs/logging.yml
+# Include this file in your compose files to standardize logging
+
+# Logging configuration for different environments
+x-logging-standard: &logging-standard
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    labels: "service,environment"
+
+x-logging-staging: &logging-staging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+    labels: "service,environment"
+    tag: "{{.Name}}/{{.ID}}"
+
+x-logging-production: &logging-production
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+    labels: "service,environment,version"
+    tag: "{{.Name}}/{{.ID}}"
+    compress: "true"
+
+# Alternative: Use syslog driver for centralized logging
+x-logging-syslog: &logging-syslog
+  driver: syslog
+  options:
+    syslog-address: "tcp://logs.internal:514"
+    syslog-facility: "daemon"
+    tag: "ttpos/{{.Name}}"
+
+# Alternative: Use fluentd for log aggregation
+x-logging-fluentd: &logging-fluentd
+  driver: fluentd
+  options:
+    fluentd-address: "localhost:24224"
+    fluentd-async: "true"
+    tag: "ttpos.{{.Name}}"
+
+# Log format templates (for application configuration)
+x-log-formats:
+  json: &log-format-json
+    format: json
+    fields:
+      - timestamp
+      - level
+      - message
+      - service
+      - environment
+      - trace_id
+
+  text: &log-format-text
+    format: text
+    template: "[{timestamp}] {level} {service}: {message}"
+
+# Log levels per environment
+x-log-levels:
+  development: debug
+  staging: info
+  production: warn
+
+# Usage in compose files:
+# services:
+#   myservice:
+#     logging: *logging-production

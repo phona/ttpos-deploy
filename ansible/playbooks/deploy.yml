@@ -1,0 +1,61 @@
+# Main Deployment Playbook
+# ansible/playbooks/deploy.yml
+
+---
+- name: Deploy TTPOS Services
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    service: "{{ service_name | default('all') }}"
+    image_tag: "{{ tag | default('latest') }}"
+    environment: "{{ env }}"
+    dry_run: "{{ dry_run | default(false) }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - environment is defined
+          - service is defined
+        fail_msg: "Required variables 'environment' and 'service' must be defined"
+
+    - name: Validate production tag
+      when: environment == 'production'
+      assert:
+        that:
+          - image_tag is defined and image_tag != '' and image_tag != 'latest'
+        fail_msg: "Production deployments require an explicit image tag (not 'latest')"
+
+    - name: Display deployment info
+      debug:
+        msg: |
+          Deployment Information:
+          =======================
+          Environment: {{ environment }}
+          Service: {{ service }}
+          Image Tag: {{ image_tag }}
+          Target Host: {{ inventory_hostname }}
+          Deploy Path: {{ deploy_path }}
+          Dry Run: {{ dry_run }}
+
+  roles:
+    - role: docker-compose
+      vars:
+        compose_service: "{{ service }}"
+        compose_tag: "{{ image_tag }}"
+        compose_env: "{{ environment }}"
+      when: not dry_run | bool
+
+  post_tasks:
+    - name: Run health check after deployment
+      include_role:
+        name: health-check
+      vars:
+        health_url: "{{ health_check_url | default('http://localhost/health') }}"
+      when: not dry_run | bool
+
+    - name: Deployment complete
+      debug:
+        msg: "Deployment of {{ service }} to {{ environment }} completed successfully on {{ inventory_hostname }}"

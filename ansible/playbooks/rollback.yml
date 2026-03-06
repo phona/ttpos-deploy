@@ -1,0 +1,101 @@
+# Rollback Playbook
+# ansible/playbooks/rollback.yml
+
+---
+- name: Rollback TTPOS Service
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    service: "{{ service_name }}"
+    rollback_tag: "{{ previous_tag }}"
+    environment: "{{ env }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - service is defined and service != ''
+          - rollback_tag is defined and rollback_tag != ''
+          - environment is defined
+        fail_msg: |
+          Required variables must be defined:
+          - service_name: The service to rollback
+          - previous_tag: The tag to rollback to
+          - env: The target environment
+
+    - name: Confirm rollback
+      debug:
+        msg: |
+          ROLLBACK PLAN
+          =============
+          Service: {{ service }}
+          Environment: {{ environment }}
+          Rolling back to tag: {{ rollback_tag }}
+          Target host: {{ inventory_hostname }}
+
+    - name: Get current running version
+      shell: |
+        docker inspect ttpos-{{ service }}-{{ environment }} \
+        --format '{{ '{{' }} .Config.Image {{ '}}' }}' 2>/dev/null || echo "unknown"
+      register: current_version
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display current version
+      debug:
+        msg: "Current version: {{ current_version.stdout }}"
+
+  tasks:
+    - name: Deploy previous version
+      include_role:
+        name: docker-compose
+      vars:
+        compose_service: "{{ service }}"
+        compose_tag: "{{ rollback_tag }}"
+        compose_env: "{{ environment }}"
+        compose_pull: yes
+
+    - name: Wait for service to be healthy
+      pause:
+        seconds: 10
+
+    - name: Run health check after rollback
+      include_role:
+        name: health-check
+      vars:
+        health_url: "{{ health_check_url | default('http://localhost/health') }}"
+      ignore_errors: yes
+      register: rollback_health
+
+    - name: Verify rollback success
+      block:
+        - name: Check rollback health status
+          assert:
+            that:
+              - rollback_health is succeeded
+            fail_msg: "Rollback health check failed - manual intervention may be required"
+            success_msg: "Rollback completed successfully"
+
+      rescue:
+        - name: Rollback verification failed
+          debug:
+            msg: |
+              WARNING: Rollback health check failed!
+              Service: {{ service }}
+              Tag: {{ rollback_tag }}
+              Host: {{ inventory_hostname }}
+
+              Please manually verify the service status.
+
+    - name: Rollback complete
+      debug:
+        msg: |
+          ROLLBACK COMPLETE
+          =================
+          Service: {{ service }}
+          Rolled back to: {{ rollback_tag }}
+          Previous version: {{ current_version.stdout }}
+          Host: {{ inventory_hostname }}
+          Status: {{ 'Success' if rollback_health is succeeded else 'Needs Attention' }}

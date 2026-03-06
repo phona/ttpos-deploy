@@ -1,0 +1,67 @@
+# Staging Environment Server Inventory
+# environments/staging/inventory.yml
+
+environment: staging
+image_registry: registry.example.com/your-org
+default_tag: latest
+
+servers:
+  - host: staging.ttpos.internal
+    user: deploy
+    ssh_port: 22
+    deploy_path: /opt/ttpos/staging
+    services:
+      - main
+      - php
+      - bmp-erp
+      - bmp-takeout
+      - bmp-message
+      - bmp-websocket
+      - nginx
+    health_check_url: https://staging.ttpos.com/health
+    tags:
+      - staging
+      - all-services
+
+# Service configuration
+services:
+  main:
+    image: ttpos-server-go
+    health_endpoint: /health
+    http_port: 8080
+
+  php:
+    image: hitosea2020/php-fpm:1.0.6
+    health_check: php-fpm-status
+    port: 9000
+
+  bmp-erp:
+    image: ttpos-bmp-erp
+    health_endpoint: /health
+    http_port: 14020
+    grpc_port: 14022
+
+  bmp-takeout:
+    image: ttpos-bmp-takeout
+    health_endpoint: /health
+    http_port: 14030
+    grpc_port: 14032
+
+  bmp-message:
+    image: ttpos-bmp-message
+    health_endpoint: /health
+    http_port: 14040
+    grpc_port: 14042
+
+  bmp-websocket:
+    image: ttpos-bmp-websocket
+    health_endpoint: /health
+    http_port: 14050
+    ws_port: 14051
+    grpc_port: 14052
+
+  nginx:
+    image: nginx:alpine
+    health_endpoint: /health
+    http_port: 80
+    https_port: 443

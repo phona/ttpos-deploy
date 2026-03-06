@@ -1,0 +1,140 @@
+# Shared Network Configuration for TTPOS Services
+# libs/network.yml
+# Include this file in your compose files to standardize networking
+
+# Network definitions
+x-networks:
+  # Main application network
+  ttpos-network: &ttpos-network
+    name: ttpos-${ENV:-local}
+    driver: bridge
+    attachable: true
+    labels:
+      - "com.ttpos.network=main"
+      - "com.ttpos.environment=${ENV:-local}"
+
+  # External network for cross-stack communication
+  ttpos-external: &ttpos-external
+    name: ttpos-external
+    external: true
+
+  # Infrastructure network (for mysql, redis access)
+  infrastructure: &infrastructure-network
+    name: ttpos-infrastructure-${ENV:-local}
+    driver: bridge
+    internal: false
+    labels:
+      - "com.ttpos.network=infrastructure"
+
+# Common network configuration for services
+x-service-network: &service-network
+  networks:
+    - ttpos-${ENV:-local}
+
+# Service network aliases (for service discovery)
+x-network-aliases:
+  main:
+    - main
+    - ttpos-main
+    - api
+
+  php:
+    - php
+    - ttpos-php
+    - php-fpm
+
+  bmp-erp:
+    - bmp-erp
+    - ttpos-bmp-erp
+    - erp
+
+  bmp-takeout:
+    - bmp-takeout
+    - ttpos-bmp-takeout
+    - takeout
+
+  bmp-message:
+    - bmp-message
+    - ttpos-bmp-message
+    - message
+
+  bmp-websocket:
+    - bmp-websocket
+    - ttpos-bmp-websocket
+    - websocket
+
+  nginx:
+    - nginx
+    - ttpos-nginx
+    - gateway
+    - api-gateway
+
+# Port configurations
+x-ports:
+  # HTTP ports
+  http: &http-port
+    protocol: tcp
+    mode: host
+
+  # gRPC ports
+  grpc: &grpc-port
+    protocol: tcp
+    mode: host
+
+  # WebSocket ports
+  websocket: &websocket-port
+    protocol: tcp
+    mode: host
+
+# Port mappings per service
+x-service-ports:
+  main:
+    http: 8080
+
+  php:
+    fpm: 9000
+
+  bmp-erp:
+    http: 14020
+    grpc: 14022
+
+  bmp-takeout:
+    http: 14030
+    grpc: 14032
+
+  bmp-message:
+    http: 14040
+    grpc: 14042
+
+  bmp-websocket:
+    http: 14050
+    ws: 14051
+    grpc: 14052
+
+  nginx:
+    http: 80
+    https: 443
+
+# DNS configuration
+x-dns-config: &dns-config
+  dns_servers:
+    - 8.8.8.8
+    - 8.8.4.4
+  dns_search:
+    - ttpos.local
+    - internal
+
+# Host entries (for local development)
+x-extra-hosts: &extra-hosts
+  extra_hosts:
+    - "mysql-proxy:host-gateway"
+    - "redis-proxy:host-gateway"
+
+# Usage in compose files:
+# networks:
+#   ttpos-network:
+#     <<: *ttpos-network
+#
+# services:
+#   myservice:
+#     <<: *service-network

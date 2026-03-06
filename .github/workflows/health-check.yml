@@ -1,0 +1,98 @@
+name: Health Check
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: true
+        type: choice
+        options:
+          - all
+          - staging
+          - production
+        default: 'all'
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - staging
+          - production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if environment should be checked
+        id: should_check
+        run: |
+          INPUT_ENV="${{ github.event.inputs.environment }}"
+          MATRIX_ENV="${{ matrix.environment }}"
+
+          # If manual trigger with specific env, only run that one
+          if [ -n "$INPUT_ENV" ] && [ "$INPUT_ENV" != "all" ] && [ "$INPUT_ENV" != "$MATRIX_ENV" ]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.should_check.outputs.should_run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq curl
+
+      - name: Check ${{ matrix.environment }} health
+        if: steps.should_check.outputs.should_run == 'true'
+        id: health_check
+        run: |
+          chmod +x scripts/health-check.sh
+
+          # Run health check
+          if ./scripts/health-check.sh -s all -e ${{ matrix.environment }}; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "${{ matrix.environment }} is healthy"
+          else
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            echo "::warning::${{ matrix.environment }} health check failed"
+            exit 1
+          fi
+
+      - name: Alert on failure
+        if: failure() && steps.should_check.outputs.should_run == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          chmod +x scripts/notify.sh
+          ./scripts/notify.sh \
+            --status unhealthy \
+            --env "${{ matrix.environment }}" || true
+
+  summary:
+    needs: health-check
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Create summary
+        run: |
+          echo "## Health Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.health-check.result }}" == "success" ]; then
+            echo "| staging | Healthy |" >> $GITHUB_STEP_SUMMARY
+            echo "| production | Healthy |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| staging | ${{ needs.health-check.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| production | ${{ needs.health-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY

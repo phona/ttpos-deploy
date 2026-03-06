@@ -1,8 +1,11 @@
 # services/php/compose.prod.yml
 # Production environment overrides for PHP Service
+# Compatible with ttpos-server-go production setup
 
 services:
   php:
+    image: ${PHP_IMAGE:-hitosea2020/php-fpm:1.0.6}
+    container_name: saas-php-${APP_ID:-prod}
     ports: []
     environment:
       - PHP_ENV=production
@@ -10,6 +13,15 @@ services:
       - PHP_ERROR_REPORTING=E_ALL & ~E_DEPRECATED & ~E_STRICT
       - OPCACHE_ENABLE=1
       - OPCACHE_VALIDATE_TIMESTAMPS=0
+    volumes:
+      - ${DOCKER_PATH:-./docker}:/var/docker:ro
+      - ${DOCKER_PATH:-./docker}/php/conf.d/docker-vars.ini:/usr/local/etc/php/conf.d/docker-vars.ini:ro
+      - ${DOCKER_PATH:-./docker}/php/php.ini:/usr/local/etc/php/php.ini:ro
+      - ${DOCKER_PATH:-./docker}/php/conf.d/opcache.ini:/usr/local/etc/php/conf.d/docker-php-ext-opcache.ini:ro
+      - ${DOCKER_PATH:-./docker}/php/php-fpm.d/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+      - ${DOCKER_PATH:-./docker}/php/supervisor/supervisor.conf:/etc/supervisor/conf.d/php.conf:ro
+      - ${DOCKER_PATH:-./docker}/certificate:/var/certificate:ro
+      - ${ADMIN_PATH:-./admin}:/var/www
     deploy:
       resources:
         limits:
@@ -29,7 +41,7 @@ services:
         max-size: "50m"
         max-file: "10"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "cgi-fcgi", "-bind", "-connect", "localhost:9000"]
       interval: 30s
       timeout: 10s
       retries: 3

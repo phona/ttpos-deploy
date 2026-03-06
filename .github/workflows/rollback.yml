@@ -21,14 +21,11 @@ on:
         type: choice
         options:
           - staging
-          - production
+          - production-us
+          - production-eu
       previous_tag:
-        description: 'Tag to rollback to'
+        description: 'Tag to rollback to (REQUIRED)'
         required: true
-
-env:
-  REGISTRY: registry.example.com/your-org
-  GIT_REPO: ${{ github.server_url }}/${{ github.repository }}.git
 
 jobs:
   validate:
@@ -48,16 +45,19 @@ jobs:
             exit 1
           fi
 
-          # Validate tag format (basic check)
+          # Validate tag format
           if [[ ! "$TAG" =~ ^[a-zA-Z0-9._-]+$ ]]; then
             echo "::error::Invalid tag format: $TAG"
             exit 1
           fi
 
-          echo "Rollback Plan:"
-          echo "  Service: ${{ github.event.inputs.service }}"
-          echo "  Environment: ${{ github.event.inputs.environment }}"
-          echo "  Rollback to tag: ${{ github.event.inputs.previous_tag }}"
+          echo "========================================"
+          echo "⚠️  ROLLBACK Plan"
+          echo "========================================"
+          echo "Service: ${{ github.event.inputs.service }}"
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Rollback to tag: $TAG"
+          echo "========================================"
 
   rollback:
     needs: validate
@@ -67,28 +67,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y yq
-
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_1 }} >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_2 }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.STAGING_SERVER }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.PRODUCTION_SERVER_US }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.PRODUCTION_SERVER_EU }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Rollback
-        env:
-          GIT_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+      - name: Setup Ansible
         run: |
-          chmod +x scripts/rollback.sh
-          ./scripts/rollback.sh \
-            "${{ github.event.inputs.service }}" \
-            "${{ github.event.inputs.environment }}" \
-            "${{ github.event.inputs.previous_tag }}"
+          pip install ansible
+
+      - name: Determine inventory
+        id: inventory
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          if [ "$ENV" == "staging" ]; then
+            echo "inventory=ansible/inventories/staging/hosts.yml" >> $GITHUB_OUTPUT
+            echo "app_id=staging" >> $GITHUB_OUTPUT
+          elif [ "$ENV" == "production-us" ]; then
+            echo "inventory=ansible/inventories/production-us/hosts.yml" >> $GITHUB_OUTPUT
+            echo "app_id=prod-us" >> $GITHUB_OUTPUT
+          elif [ "$ENV" == "production-eu" ]; then
+            echo "inventory=ansible/inventories/production-eu/hosts.yml" >> $GITHUB_OUTPUT
+            echo "app_id=prod-eu" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rollback with Ansible
+        run: |
+          SERVICE="${{ github.event.inputs.service }}"
+          ENV="${{ github.event.inputs.environment }}"
+          TAG="${{ github.event.inputs.previous_tag }}"
+          INVENTORY="${{ steps.inventory.outputs.inventory }}"
+          APP_ID="${{ steps.inventory.outputs.app_id }}"
+
+          ansible-playbook -i $INVENTORY \
+            ansible/playbooks/rollback.yml \
+            -e "service_name=$SERVICE" \
+            -e "env=$ENV" \
+            -e "tag=$TAG" \
+            -e "app_id=$APP_ID" \
+            -v
 
       - name: Run health check
         if: success()

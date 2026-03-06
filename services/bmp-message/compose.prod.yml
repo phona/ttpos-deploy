@@ -1,21 +1,27 @@
 # services/bmp-message/compose.prod.yml
 # Production environment overrides for BMP Message Service
+# Compatible with ttpos-server-go production setup
 
 services:
   bmp-message:
+    image: ${IMAGE_REGISTRY:-hub.hitosea.com/ttpos-server}/ttpos-server-message:${IMAGE_VERSION}
+    container_name: ttpos-bmp-message-${APP_ID:-prod}
     ports: []
     environment:
       - GIN_MODE=release
       - LOG_LEVEL=${LOG_LEVEL:-warn}
-      - ENABLE_PPROF=false
+      - GRPC_ENDPOINTS=${GRPC_ENDPOINTS}:14042
+    volumes:
+      - ${CONFIG_PATH:-./app/ttpos-message/manifest/config}:/app/config:ro
+      - ${LOG_PATH:-./docker/bmp-message/logs}:/app/log
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
+          cpus: '1'
+          memory: 1G
         reservations:
-          cpus: '500m'
-          memory: 512M
+          cpus: '250m'
+          memory: 256M
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -27,12 +33,12 @@ services:
         max-size: "50m"
         max-file: "10"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "grpc_health_probe", "-addr=:14042"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
     labels:
       - "com.ttpos.service=bmp-message"
-      - "com.ttpos.version=${IMAGE_TAG}"
+      - "com.ttpos.version=${IMAGE_VERSION}"
       - "com.ttpos.environment=production"

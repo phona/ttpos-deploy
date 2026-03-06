@@ -159,9 +159,11 @@ deploy_service() {
         compose_cmd="$compose_cmd -f $env_compose_file"
     fi
 
-    # Add environment variables
-    export IMAGE_TAG="$TAG"
+    # Add environment variables (compatible with production naming)
+    export IMAGE_VERSION="$TAG"
+    export IMAGE_TAG="$TAG"  # Backward compatibility
     export ENV="$ENV"
+    export APP_ID="${APP_ID:-$ENV}"
     export ENV_FILE="$ENV_FILE"
 
     if [[ "$DRY_RUN" == true ]]; then
@@ -194,7 +196,17 @@ wait_for_health() {
     for svc in $services; do
         elapsed=0
         while [[ $elapsed -lt $max_wait ]]; do
-            local container="ttpos-$svc-$ENV"
+            # Support both old and new container naming
+            local container_old="ttpos-$svc-$ENV"
+            local container_new="saas-$svc-${APP_ID:-$ENV}"
+            local container=""
+
+            if docker ps --format '{{.Names}}' | grep -q "^saas-$svc"; then
+                container=$container_new
+            else
+                container=$container_old
+            fi
+
             local status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "unknown")
 
             if [[ "$status" == "healthy" ]]; then
@@ -231,9 +243,11 @@ main() {
 
     load_env
 
-    # Create Docker network if needed
+    # Create Docker network if needed (support both old and new naming)
     if [[ "$DRY_RUN" == false ]]; then
         docker network create "ttpos-$ENV" 2>/dev/null || true
+        docker network create "saas-network-${APP_ID:-$ENV}" 2>/dev/null || true
+        docker network create "bmp-network-${APP_ID:-$ENV}" 2>/dev/null || true
     fi
 
     # Get services to deploy
@@ -256,7 +270,9 @@ main() {
     if [[ "$DRY_RUN" == false ]]; then
         echo -e "${BLUE}Service Status:${NC}"
         for svc in $services; do
+            # Support both old and new container naming patterns
             docker ps --filter "name=ttpos-$svc-$ENV" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+            docker ps --filter "name=saas-$svc-${APP_ID:-$ENV}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
         done
     fi
 }

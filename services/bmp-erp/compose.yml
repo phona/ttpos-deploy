@@ -1,42 +1,50 @@
 # services/bmp-erp/compose.yml
 # Base configuration for BMP ERP Microservice
+# Compatible with production deployment from ttpos-server-go
 
 x-common: &common
-  restart: unless-stopped
+  restart: always
   logging:
     driver: json-file
     options:
       max-size: "10m"
       max-file: "3"
   networks:
-    - ttpos-network
+    - bmp-network
 
 services:
   bmp-erp:
     <<: *common
-    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-erp:${IMAGE_TAG:-latest}
-    container_name: ttpos-bmp-erp-${ENV:-local}
+    image: ${IMAGE_REGISTRY:-hub.hitosea.com/ttpos-server}/ttpos-server-erp:${IMAGE_VERSION:-latest}
+    container_name: ttpos-bmp-erp-${APP_ID:-dev}
     hostname: bmp-erp
-    env_file:
-      - ${ENV_FILE:-environments/${ENV:-local}/env}
     environment:
-      - ENV=${ENV:-local}
-      - IMAGE_TAG=${IMAGE_TAG:-latest}
-      - GRPC_PORT=14022
+      - GRPC_ENDPOINTS=${GRPC_ENDPOINTS:-}:14022
+    volumes:
+      - ${CONFIG_PATH:-./app/ttpos-erp/manifest/config}:/app/config
+      - ${LOG_PATH:-./docker/bmp-erp/logs}:/app/log
+    ports:
+      - "14021:14021"
+      - "14022:14022"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "grpc_health_probe", "-addr=:14022"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     labels:
       - "com.ttpos.service=bmp-erp"
-      - "com.ttpos.version=${IMAGE_TAG:-latest}"
+      - "com.ttpos.version=${IMAGE_VERSION:-latest}"
       - "com.ttpos.environment=${ENV:-local}"
     networks:
-      - ttpos-network
+      bmp-network:
+        ipv4_address: ${BMP_ERP_IP:-10.0.10.42}
 
 networks:
-  ttpos-network:
-    name: ttpos-${ENV:-local}
-    external: true
+  bmp-network:
+    name: bmp-network-${APP_ID:-dev}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BMP_NETWORK_SUBNET:-10.0.10.0/24}
+          gateway: ${BMP_NETWORK_GATEWAY:-10.0.10.1}

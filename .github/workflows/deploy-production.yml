@@ -1,0 +1,220 @@
+name: Deploy Production
+
+on:
+  # Manual trigger only for production
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy'
+        required: true
+        type: choice
+        options:
+          - all
+          - main
+          - php
+          - bmp-erp
+          - bmp-takeout
+          - bmp-message
+          - bmp-websocket
+          - nginx
+      image_tag:
+        description: 'Image tag (REQUIRED - must be explicit semver)'
+        required: true
+      target:
+        description: 'Target region'
+        required: true
+        type: choice
+        options:
+          - all
+          - production-us
+          - production-eu
+      dry_run:
+        description: 'Dry run (show what would happen)'
+        type: boolean
+        default: false
+
+env:
+  ENVIRONMENT: production
+  REGISTRY: hub.hitosea.com/ttpos-server
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      service: ${{ steps.set.outputs.service }}
+      image_tag: ${{ steps.set.outputs.image_tag }}
+      target: ${{ steps.set.outputs.target }}
+      dry_run: ${{ steps.set.outputs.dry_run }}
+
+    steps:
+      - name: Validate image tag
+        id: validate
+        run: |
+          TAG="${{ inputs.image_tag }}"
+
+          # Production requires explicit semver tag (not 'latest', not SHA)
+          if [[ -z "$TAG" ]] || [[ "$TAG" == "latest" ]]; then
+            echo "::error::Production deployments require an explicit semver tag (e.g., v1.2.3)"
+            exit 1
+          fi
+
+          # Validate semver format
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid semver format. Expected: v1.2.3 or 1.2.3"
+            exit 1
+          fi
+
+          echo "✅ Valid semver tag: $TAG"
+
+      - name: Set variables
+        id: set
+        run: |
+          echo "service=${{ inputs.service }}" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "target=${{ inputs.target }}" >> $GITHUB_OUTPUT
+          echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
+
+      - name: Display deployment info
+        run: |
+          echo "========================================"
+          echo "🚨 PRODUCTION Deployment"
+          echo "========================================"
+          echo "Service: ${{ inputs.service }}"
+          echo "Image Tag: ${{ inputs.image_tag }}"
+          echo "Target: ${{ inputs.target }}"
+          echo "Dry Run: ${{ inputs.dry_run }}"
+          echo "========================================"
+
+  validate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose files
+        run: |
+          SERVICE="${{ needs.prepare.outputs.service }}"
+          ENV="production"
+
+          if [ "$SERVICE" == "all" ]; then
+            SERVICES="main php bmp-erp bmp-takeout bmp-message bmp-websocket nginx"
+          else
+            SERVICES="$SERVICE"
+          fi
+
+          for svc in $SERVICES; do
+            if [ -f "services/$svc/compose.yml" ]; then
+              echo "Validating $svc..."
+              docker compose -f "services/$svc/compose.yml" config --quiet
+
+              if [ -f "services/$svc/compose.$ENV.yml" ]; then
+                docker compose -f "services/$svc/compose.yml" -f "services/$svc/compose.$ENV.yml" config --quiet
+              fi
+            fi
+          done
+
+  deploy:
+    needs: [prepare, validate]
+    runs-on: ubuntu-latest
+    environment: production  # Requires GitHub environment protection rules
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.PRODUCTION_SERVER_US }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.PRODUCTION_SERVER_EU }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Setup Ansible
+        run: |
+          pip install ansible
+
+      - name: Decrypt secrets
+        if: ${{ secrets.SOPS_AGE_KEY != '' }}
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          chmod +x scripts/decrypt-secrets.sh
+          ./scripts/decrypt-secrets.sh production
+
+      - name: Deploy to US region
+        if: needs.prepare.outputs.target == 'all' || needs.prepare.outputs.target == 'production-us'
+        run: |
+          SERVICE="${{ needs.prepare.outputs.service }}"
+          TAG="${{ needs.prepare.outputs.image_tag }}"
+          DRY_RUN="${{ needs.prepare.outputs.dry_run }}"
+
+          EXTRA_VARS="service_name=$SERVICE env=production tag=$TAG app_id=prod-us"
+
+          if [ "$DRY_RUN" == "true" ]; then
+            echo "[DRY RUN] Would deploy $SERVICE with tag $TAG to production-us"
+            ansible-playbook -i ansible/inventories/production-us/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              --check \
+              -v
+          else
+            ansible-playbook -i ansible/inventories/production-us/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              -v
+          fi
+
+      - name: Deploy to EU region
+        if: needs.prepare.outputs.target == 'all' || needs.prepare.outputs.target == 'production-eu'
+        run: |
+          SERVICE="${{ needs.prepare.outputs.service }}"
+          TAG="${{ needs.prepare.outputs.image_tag }}"
+          DRY_RUN="${{ needs.prepare.outputs.dry_run }}"
+
+          EXTRA_VARS="service_name=$SERVICE env=production tag=$TAG app_id=prod-eu"
+
+          if [ "$DRY_RUN" == "true" ]; then
+            echo "[DRY RUN] Would deploy $SERVICE with tag $TAG to production-eu"
+            ansible-playbook -i ansible/inventories/production-eu/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              --check \
+              -v
+          else
+            ansible-playbook -i ansible/inventories/production-eu/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              -v
+          fi
+
+      - name: Run health check
+        if: success() && needs.prepare.outputs.dry_run != 'true'
+        run: |
+          chmod +x scripts/health-check.sh
+          ./scripts/health-check.sh -s ${{ needs.prepare.outputs.service }} -e production
+
+      - name: Notify success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          chmod +x scripts/notify.sh
+          ./scripts/notify.sh \
+            --status success \
+            --service "${{ needs.prepare.outputs.service }}" \
+            --env "production" \
+            --tag "${{ needs.prepare.outputs.image_tag }}" \
+            --target "${{ needs.prepare.outputs.target }}" || true
+
+      - name: Notify failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          chmod +x scripts/notify.sh
+          ./scripts/notify.sh \
+            --status failure \
+            --service "${{ needs.prepare.outputs.service }}" \
+            --env "production" \
+            --tag "${{ needs.prepare.outputs.image_tag }}" \
+            --target "${{ needs.prepare.outputs.target }}" || true

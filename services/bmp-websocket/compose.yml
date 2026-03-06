@@ -1,43 +1,50 @@
 # services/bmp-websocket/compose.yml
 # Base configuration for BMP WebSocket Microservice
+# Compatible with production deployment from ttpos-server-go
 
 x-common: &common
-  restart: unless-stopped
+  restart: always
   logging:
     driver: json-file
     options:
       max-size: "10m"
       max-file: "3"
   networks:
-    - ttpos-network
+    - bmp-network
 
 services:
   bmp-websocket:
     <<: *common
-    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-websocket:${IMAGE_TAG:-latest}
-    container_name: ttpos-bmp-websocket-${ENV:-local}
+    image: ${IMAGE_REGISTRY:-hub.hitosea.com/ttpos-server}/ttpos-server-websocket:${IMAGE_VERSION:-latest}
+    container_name: ttpos-bmp-websocket-${APP_ID:-dev}
     hostname: bmp-websocket
-    env_file:
-      - ${ENV_FILE:-environments/${ENV:-local}/env}
     environment:
-      - ENV=${ENV:-local}
-      - IMAGE_TAG=${IMAGE_TAG:-latest}
-      - GRPC_PORT=14052
-      - WS_PORT=14051
+      - GRPC_ENDPOINTS=${GRPC_ENDPOINTS:-}:14052
+    volumes:
+      - ${CONFIG_PATH:-./app/ttpos-websocket/manifest/config}:/app/config
+      - ${LOG_PATH:-./docker/bmp-websocket/logs}:/app/log
+    ports:
+      - "14051:14051"
+      - "14052:14052"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "grpc_health_probe", "-addr=:14052"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     labels:
       - "com.ttpos.service=bmp-websocket"
-      - "com.ttpos.version=${IMAGE_TAG:-latest}"
+      - "com.ttpos.version=${IMAGE_VERSION:-latest}"
       - "com.ttpos.environment=${ENV:-local}"
     networks:
-      - ttpos-network
+      bmp-network:
+        ipv4_address: ${BMP_WEBSOCKET_IP:-10.0.10.45}
 
 networks:
-  ttpos-network:
-    name: ttpos-${ENV:-local}
-    external: true
+  bmp-network:
+    name: bmp-network-${APP_ID:-dev}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BMP_NETWORK_SUBNET:-10.0.10.0/24}
+          gateway: ${BMP_NETWORK_GATEWAY:-10.0.10.1}

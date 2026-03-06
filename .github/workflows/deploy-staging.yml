@@ -1,9 +1,9 @@
-name: Deploy
+name: Deploy Staging
 
 on:
-  # Trigger from other repos (ttpos-server-go)
+  # Trigger from other repos (ttpos-server-go CI completion)
   repository_dispatch:
-    types: [deploy-service]
+    types: [deploy-staging]
 
   # Manual trigger
   workflow_dispatch:
@@ -21,33 +21,26 @@ on:
           - bmp-message
           - bmp-websocket
           - nginx
-      environment:
-        description: 'Target environment'
-        required: true
-        type: choice
-        options:
-          - staging
-          - production
-        default: 'staging'
       image_tag:
-        description: 'Image tag (required for production)'
+        description: 'Image tag (default: latest)'
         required: false
+        default: 'latest'
       dry_run:
         description: 'Dry run (show what would happen)'
         type: boolean
         default: false
 
 env:
-  REGISTRY: registry.example.com/your-org
-  GIT_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+  ENVIRONMENT: staging
+  REGISTRY: hub.hitosea.com/ttpos-server
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
       service: ${{ steps.set.outputs.service }}
-      environment: ${{ steps.set.outputs.environment }}
       image_tag: ${{ steps.set.outputs.image_tag }}
+      dry_run: ${{ steps.set.outputs.dry_run }}
 
     steps:
       - name: Set variables
@@ -55,27 +48,23 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
             echo "service=${{ github.event.client_payload.service }}" >> $GITHUB_OUTPUT
-            echo "environment=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
-            echo "image_tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            echo "image_tag=${{ github.event.client_payload.tag || 'latest' }}" >> $GITHUB_OUTPUT
+            echo "dry_run=false" >> $GITHUB_OUTPUT
           else
-            echo "service=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
-            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "service=${{ inputs.service }}" >> $GITHUB_OUTPUT
+            echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Validate production tag
+      - name: Display deployment info
         run: |
-          ENV="${{ steps.set.outputs.environment }}"
-          TAG="${{ steps.set.outputs.image_tag }}"
-
-          if [ "$ENV" == "production" ] && [ -z "$TAG" ]; then
-            echo "::error::Production deployments require an explicit image tag"
-            exit 1
-          fi
-
+          echo "========================================"
+          echo "Staging Deployment"
+          echo "========================================"
           echo "Service: ${{ steps.set.outputs.service }}"
-          echo "Environment: ${{ steps.set.outputs.environment }}"
           echo "Image Tag: ${{ steps.set.outputs.image_tag }}"
+          echo "Dry Run: ${{ steps.set.outputs.dry_run }}"
+          echo "========================================"
 
   validate:
     needs: prepare
@@ -86,7 +75,7 @@ jobs:
       - name: Validate compose files
         run: |
           SERVICE="${{ needs.prepare.outputs.service }}"
-          ENV="${{ needs.prepare.outputs.environment }}"
+          ENV="staging"
 
           if [ "$SERVICE" == "all" ]; then
             SERVICES="main php bmp-erp bmp-takeout bmp-message bmp-websocket nginx"
@@ -108,29 +97,21 @@ jobs:
   deploy:
     needs: [prepare, validate]
     runs-on: ubuntu-latest
-    environment: ${{ needs.prepare.outputs.environment }}
+    environment: staging
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y yq
-
-      - name: Install SOPS
-        run: |
-          curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
-          chmod +x sops-*
-          sudo mv sops-* /usr/local/bin/sops
 
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_1 }} >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H ${{ secrets.DEPLOY_SERVER_2 }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.STAGING_SERVER }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Setup Ansible
+        run: |
+          pip install ansible
 
       - name: Decrypt secrets
         if: ${{ secrets.SOPS_AGE_KEY != '' }}
@@ -138,29 +119,35 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: |
           chmod +x scripts/decrypt-secrets.sh
-          ./scripts/decrypt-secrets.sh ${{ needs.prepare.outputs.environment }}
+          ./scripts/decrypt-secrets.sh staging
 
-      - name: Deploy
+      - name: Deploy with Ansible
         run: |
-          chmod +x scripts/deploy.sh
+          SERVICE="${{ needs.prepare.outputs.service }}"
+          TAG="${{ needs.prepare.outputs.image_tag }}"
+          DRY_RUN="${{ needs.prepare.outputs.dry_run }}"
 
-          ARGS="-s ${{ needs.prepare.outputs.service }} -e ${{ needs.prepare.outputs.environment }}"
+          EXTRA_VARS="service_name=$SERVICE env=staging tag=$TAG app_id=staging"
 
-          if [ -n "${{ needs.prepare.outputs.image_tag }}" ]; then
-            ARGS="$ARGS -t ${{ needs.prepare.outputs.image_tag }}"
+          if [ "$DRY_RUN" == "true" ]; then
+            echo "[DRY RUN] Would deploy $SERVICE with tag $TAG to staging"
+            ansible-playbook -i ansible/inventories/staging/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              --check \
+              -v
+          else
+            ansible-playbook -i ansible/inventories/staging/hosts.yml \
+              ansible/playbooks/deploy.yml \
+              -e "$EXTRA_VARS" \
+              -v
           fi
-
-          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
-
-          ./scripts/deploy.sh $ARGS
 
       - name: Run health check
-        if: success()
+        if: success() && needs.prepare.outputs.dry_run != 'true'
         run: |
           chmod +x scripts/health-check.sh
-          ./scripts/health-check.sh -s ${{ needs.prepare.outputs.service }} -e ${{ needs.prepare.outputs.environment }}
+          ./scripts/health-check.sh -s ${{ needs.prepare.outputs.service }} -e staging
 
       - name: Notify success
         if: success()
@@ -171,7 +158,7 @@ jobs:
           ./scripts/notify.sh \
             --status success \
             --service "${{ needs.prepare.outputs.service }}" \
-            --env "${{ needs.prepare.outputs.environment }}" \
+            --env "staging" \
             --tag "${{ needs.prepare.outputs.image_tag }}" || true
 
       - name: Notify failure
@@ -183,5 +170,5 @@ jobs:
           ./scripts/notify.sh \
             --status failure \
             --service "${{ needs.prepare.outputs.service }}" \
-            --env "${{ needs.prepare.outputs.environment }}" \
+            --env "staging" \
             --tag "${{ needs.prepare.outputs.image_tag }}" || true

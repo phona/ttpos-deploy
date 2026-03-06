@@ -1,42 +1,50 @@
 # services/bmp-message/compose.yml
 # Base configuration for BMP Message Microservice
+# Compatible with production deployment from ttpos-server-go
 
 x-common: &common
-  restart: unless-stopped
+  restart: always
   logging:
     driver: json-file
     options:
       max-size: "10m"
       max-file: "3"
   networks:
-    - ttpos-network
+    - bmp-network
 
 services:
   bmp-message:
     <<: *common
-    image: ${IMAGE_REGISTRY:-registry.example.com/your-org}/ttpos-bmp-message:${IMAGE_TAG:-latest}
-    container_name: ttpos-bmp-message-${ENV:-local}
+    image: ${IMAGE_REGISTRY:-hub.hitosea.com/ttpos-server}/ttpos-server-message:${IMAGE_VERSION:-latest}
+    container_name: ttpos-bmp-message-${APP_ID:-dev}
     hostname: bmp-message
-    env_file:
-      - ${ENV_FILE:-environments/${ENV:-local}/env}
     environment:
-      - ENV=${ENV:-local}
-      - IMAGE_TAG=${IMAGE_TAG:-latest}
-      - GRPC_PORT=14042
+      - GRPC_ENDPOINTS=${GRPC_ENDPOINTS:-}:14042
+    volumes:
+      - ${CONFIG_PATH:-./app/ttpos-message/manifest/config}:/app/config
+      - ${LOG_PATH:-./docker/bmp-message/logs}:/app/log
+    ports:
+      - "14041:14041"
+      - "14042:14042"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "grpc_health_probe", "-addr=:14042"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     labels:
       - "com.ttpos.service=bmp-message"
-      - "com.ttpos.version=${IMAGE_TAG:-latest}"
+      - "com.ttpos.version=${IMAGE_VERSION:-latest}"
       - "com.ttpos.environment=${ENV:-local}"
     networks:
-      - ttpos-network
+      bmp-network:
+        ipv4_address: ${BMP_MESSAGE_IP:-10.0.10.44}
 
 networks:
-  ttpos-network:
-    name: ttpos-${ENV:-local}
-    external: true
+  bmp-network:
+    name: bmp-network-${APP_ID:-dev}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BMP_NETWORK_SUBNET:-10.0.10.0/24}
+          gateway: ${BMP_NETWORK_GATEWAY:-10.0.10.1}

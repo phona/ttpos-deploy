@@ -1,33 +1,36 @@
 # services/php/compose.yml
 # Base configuration for PHP-FPM Service
+# Compatible with production deployment from ttpos-server-go
 
 x-common: &common
-  restart: unless-stopped
+  restart: always
   logging:
     driver: json-file
     options:
       max-size: "10m"
       max-file: "3"
   networks:
-    - ttpos-network
+    - saas-network
 
 services:
   php:
     <<: *common
     image: ${PHP_IMAGE:-hitosea2020/php-fpm:1.0.6}
-    container_name: ttpos-php-${ENV:-local}
+    container_name: saas-php-${APP_ID:-dev}
     hostname: php
     env_file:
-      - ${ENV_FILE:-environments/${ENV:-local}/env}
-    environment:
-      - ENV=${ENV:-local}
+      - ${ENV_FILE:-.env}
     volumes:
-      - php-data:/var/www/html
-      - ./config/php.ini:/usr/local/etc/php/php.ini:ro
-      - ./config/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
-      - ./config/supervisor.conf:/etc/supervisor/conf.d/supervisor.conf:ro
+      - ${DOCKER_PATH:-./docker}:/var/docker
+      - ${DOCKER_PATH:-./docker}/php/conf.d/docker-vars.ini:/usr/local/etc/php/conf.d/docker-vars.ini
+      - ${DOCKER_PATH:-./docker}/php/php.ini:/usr/local/etc/php/php.ini
+      - ${DOCKER_PATH:-./docker}/php/conf.d/opcache.ini:/usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
+      - ${DOCKER_PATH:-./docker}/php/php-fpm.d/www.conf:/usr/local/etc/php-fpm.d/www.conf
+      - ${DOCKER_PATH:-./docker}/php/supervisor/supervisor.conf:/etc/supervisor/conf.d/php.conf
+      - ${CERT_PATH:-./docker/certificate}:/var/certificate
+      - ${ADMIN_PATH:-./admin}:/var/www
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "cgi-fcgi", "-bind", "-connect", "localhost:9000"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -36,13 +39,14 @@ services:
       - "com.ttpos.service=php"
       - "com.ttpos.environment=${ENV:-local}"
     networks:
-      - ttpos-network
-
-volumes:
-  php-data:
-    name: ttpos-php-data-${ENV:-local}
+      saas-network:
+        ipv4_address: ${PHP_IP:-10.0.0.10}
 
 networks:
-  ttpos-network:
-    name: ttpos-${ENV:-local}
-    external: true
+  saas-network:
+    name: saas-network-${APP_ID:-dev}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NETWORK_SUBNET:-10.0.0.0/24}
+          gateway: ${NETWORK_GATEWAY:-10.0.0.1}

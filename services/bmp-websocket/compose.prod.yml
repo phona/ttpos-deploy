@@ -1,21 +1,26 @@
 # services/bmp-websocket/compose.prod.yml
 # Production environment overrides for BMP WebSocket Service
+# Compatible with ttpos-server-go production setup
 
 services:
   bmp-websocket:
+    image: ${IMAGE_REGISTRY:-hub.hitosea.com/ttpos-server}/ttpos-server-websocket:${IMAGE_VERSION}
+    container_name: ttpos-bmp-websocket-${APP_ID:-prod}
     ports: []
     environment:
       - GIN_MODE=release
       - LOG_LEVEL=${LOG_LEVEL:-warn}
-      - ENABLE_PPROF=false
+      - GRPC_ENDPOINTS=${GRPC_ENDPOINTS}:14052
+    volumes:
+      - ${CONFIG_PATH:-./app/ttpos-websocket/manifest/config}:/app/config:ro
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
+          cpus: '1'
+          memory: 1G
         reservations:
-          cpus: '500m'
-          memory: 512M
+          cpus: '250m'
+          memory: 256M
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -27,12 +32,12 @@ services:
         max-size: "50m"
         max-file: "10"
     healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
+      test: ["CMD", "grpc_health_probe", "-addr=:14052"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
     labels:
       - "com.ttpos.service=bmp-websocket"
-      - "com.ttpos.version=${IMAGE_TAG}"
+      - "com.ttpos.version=${IMAGE_VERSION}"
       - "com.ttpos.environment=production"

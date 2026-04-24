@@ -1,0 +1,35 @@
+# docker-compose.accept.yml
+# Ephemeral acceptance lab for sisyphus e2e testing.
+# Started by ci-accept-env-up, torn down by ci-accept-env-down.
+# Server image: either pre-built (ACCEPT_IMAGE) or built from acceptance/mock-server/.
+#
+# Usage by sisyphus:
+#   SISYPHUS_NAMESPACE=accept-req-... make ci-accept-env-up
+#
+# The server exposes:
+#   GET /healthz           → {"status":"ok"}
+#   GET /buildinfo         → build metadata
+#   GET /api/menu          → sample menu items
+
+services:
+  server:
+    image: ${ACCEPT_IMAGE:-ttpos-accept-server:local}
+    container_name: ${ACCEPT_CONTAINER:-ttpos-accept-server}
+    environment:
+      - BUILD_ID=${BUILD_ID:-accept-lab}
+      - PORT=8080
+    ports:
+      - "${ACCEPT_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - accept-net
+
+networks:
+  accept-net:
+    name: accept-net-${SISYPHUS_NAMESPACE:-local}
+    driver: bridge

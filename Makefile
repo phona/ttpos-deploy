@@ -254,3 +254,64 @@ pull:
 		fi \
 	done
 	@echo "$(GREEN)Pull complete$(NC)"
+
+# ===========================================
+# Sisyphus Acceptance Environment (ci-accept-env-up / ci-accept-env-down)
+# Called by sisyphus orchestrator after pr-ci-watch passes.
+# Contract: https://github.com/phona/sisyphus/blob/main/docs/integration-contracts.md
+#
+# Env vars injected by sisyphus:
+#   SISYPHUS_REQ_ID    - e.g. REQ-acceptance-e2e-1777045998
+#   SISYPHUS_NAMESPACE - e.g. accept-req-acceptance-e2e-1777045998
+#   SISYPHUS_STAGE     - accept-env-up | accept-teardown
+#
+# Optional override:
+#   ACCEPT_IMAGE       - pre-built image tag (ghcr.io/phona/ttpos-server-go:<tag>)
+#                        If not set, builds acceptance/mock-server/ locally.
+# ===========================================
+
+ACCEPT_DIR       := $(CURDIR)/acceptance
+ACCEPT_COMPOSE   := $(CURDIR)/docker-compose.accept.yml
+SISYPHUS_NAMESPACE ?= accept-local
+ACCEPT_PORT      := $(shell shuf -i 19000-19999 -n 1)
+ACCEPT_CONTAINER := ttpos-accept-$(SISYPHUS_NAMESPACE)
+
+.PHONY: ci-accept-env-up ci-accept-env-down _accept-build-image _accept-wait-healthy
+
+ci-accept-env-up: _accept-build-image ## Sisyphus: start acceptance lab, print endpoint JSON last line
+	@echo "[accept-env-up] starting server (namespace=$(SISYPHUS_NAMESPACE), port=$(ACCEPT_PORT))"
+	@ACCEPT_IMAGE=$(ACCEPT_IMAGE) \
+	  ACCEPT_PORT=$(ACCEPT_PORT) \
+	  ACCEPT_CONTAINER=$(ACCEPT_CONTAINER) \
+	  SISYPHUS_NAMESPACE=$(SISYPHUS_NAMESPACE) \
+	  docker compose -f $(ACCEPT_COMPOSE) up -d --remove-orphans
+	@$(MAKE) _accept-wait-healthy ACCEPT_PORT=$(ACCEPT_PORT) ACCEPT_CONTAINER=$(ACCEPT_CONTAINER)
+	@printf '{"endpoint":"http://localhost:%s","namespace":"%s","container":"%s"}\n' \
+	  "$(ACCEPT_PORT)" "$(SISYPHUS_NAMESPACE)" "$(ACCEPT_CONTAINER)"
+
+ci-accept-env-down: ## Sisyphus: tear down acceptance lab (best-effort, idempotent)
+	@echo "[accept-env-down] tearing down (namespace=$(SISYPHUS_NAMESPACE))"
+	-ACCEPT_CONTAINER=$(ACCEPT_CONTAINER) \
+	  SISYPHUS_NAMESPACE=$(SISYPHUS_NAMESPACE) \
+	  docker compose -f $(ACCEPT_COMPOSE) down --remove-orphans 2>/dev/null || true
+	-docker rm -f "$(ACCEPT_CONTAINER)" 2>/dev/null || true
+
+_accept-build-image:
+	@if [ -z "$(ACCEPT_IMAGE)" ]; then \
+	  echo "[accept-env-up] ACCEPT_IMAGE not set — building from acceptance/mock-server/"; \
+	  docker build -t ttpos-accept-server:local $(ACCEPT_DIR)/mock-server/ || exit 1; \
+	  echo "ACCEPT_IMAGE=ttpos-accept-server:local"; \
+	fi
+
+_accept-wait-healthy:
+	@echo "[accept-env-up] waiting for healthz on port $(ACCEPT_PORT)..."
+	@for i in $$(seq 1 30); do \
+	  if curl -sf http://localhost:$(ACCEPT_PORT)/healthz > /dev/null 2>&1; then \
+	    echo "[accept-env-up] server healthy ✓"; \
+	    exit 0; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	echo "[accept-env-up] ERROR: server did not become healthy in 30s" >&2; \
+	docker logs "$(ACCEPT_CONTAINER)" 2>&1 | tail -20 >&2; \
+	exit 1

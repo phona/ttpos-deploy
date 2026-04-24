@@ -1,0 +1,41 @@
+openspec: "1.0"
+id: accept-env
+title: Sisyphus Acceptance Environment Contract
+description: >
+  Defines the Makefile targets and I/O contract between ttpos-deploy (integration repo)
+  and the sisyphus orchestrator for the acceptance stage.
+
+endpoints:
+  - id: ci-accept-env-up
+    kind: makefile-target
+    description: Start ephemeral acceptance lab, print endpoint JSON as last stdout line.
+    inputs:
+      env:
+        SISYPHUS_REQ_ID: "REQ identifier (e.g. REQ-acceptance-e2e-1777045998)"
+        SISYPHUS_NAMESPACE: "Namespace/prefix for container naming"
+        SISYPHUS_STAGE: "accept-env-up"
+        ACCEPT_IMAGE: "(optional) pre-built Docker image tag; omit to build from source"
+    outputs:
+      stdout_last_line:
+        schema:
+          type: object
+          required: [endpoint, namespace]
+          properties:
+            endpoint:
+              type: string
+              description: "http://localhost:<port>"
+            namespace:
+              type: string
+            container:
+              type: string
+    exit_code: 0  # on success
+
+  - id: ci-accept-env-down
+    kind: makefile-target
+    description: >
+      Tear down the acceptance lab. Best-effort, idempotent. Failure is non-fatal
+      (sisyphus logs warning but continues).
+    inputs:
+      env:
+        SISYPHUS_NAMESPACE: "Must match the value used in ci-accept-env-up"
+    exit_code: 0  # always 0 (best-effort)

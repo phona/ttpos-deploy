@@ -73,6 +73,12 @@ func lastLine(s string) string {
 	return ""
 }
 
+// toIPv4Endpoint replaces "localhost" with "127.0.0.1" so Go's HTTP client
+// doesn't try IPv6 first when Docker only binds on IPv4.
+func toIPv4Endpoint(ep string) string {
+	return strings.ReplaceAll(ep, "://localhost:", "://127.0.0.1:")
+}
+
 // lastJSONLine finds the last line in s that looks like a JSON object (starts with '{').
 // Falls back to lastLine if no such line exists.
 func lastJSONLine(s string) string {
@@ -99,7 +105,7 @@ func TestMain(m *testing.M) {
 	var j map[string]any
 	if err := json.Unmarshal([]byte(last), &j); err == nil {
 		if ep, ok := j["endpoint"].(string); ok {
-			testEndpoint = ep
+			testEndpoint = toIPv4Endpoint(ep)
 		}
 	}
 	result := m.Run()

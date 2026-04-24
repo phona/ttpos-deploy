@@ -73,6 +73,19 @@ func lastLine(s string) string {
 	return ""
 }
 
+// lastJSONLine finds the last line in s that looks like a JSON object (starts with '{').
+// Falls back to lastLine if no such line exists.
+func lastJSONLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(t, "{") {
+			return t
+		}
+	}
+	return lastLine(s)
+}
+
 // TestMain starts the shared acceptance env, runs all tests, then tears down.
 func TestMain(m *testing.M) {
 	out, code := runMake("ci-accept-env-up",
@@ -82,7 +95,7 @@ func TestMain(m *testing.M) {
 			"[TestMain] ci-accept-env-up failed (exit %d):\n%s\n", code, out)
 		os.Exit(1)
 	}
-	last := lastLine(out)
+	last := lastJSONLine(out)
 	var j map[string]any
 	if err := json.Unmarshal([]byte(last), &j); err == nil {
 		if ep, ok := j["endpoint"].(string); ok {
@@ -103,10 +116,10 @@ func TestS1_EnvUpExitsZeroAndOutputsEndpointJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("ci-accept-env-up exit %d; output:\n%s", code, out)
 	}
-	last := lastLine(out)
+	last := lastJSONLine(out)
 	var j map[string]any
 	if err := json.Unmarshal([]byte(last), &j); err != nil {
-		t.Fatalf("last stdout line is not valid JSON: %q; err: %v", last, err)
+		t.Fatalf("no valid JSON object line found in output: %q; err: %v", last, err)
 	}
 	for _, key := range []string{"endpoint", "namespace"} {
 		if _, ok := j[key]; !ok {

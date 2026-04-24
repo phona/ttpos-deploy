@@ -21,7 +21,8 @@ SCRIPTS_DIR := scripts
 
 .PHONY: help deploy rollback health-check logs validate clean lint \
         dev dev-down dev-logs dev-logs-service dev-partial dev-reset dev-status dev-ps dev-init \
-        dev-restart dev-rebuild decrypt-secrets ansible-deploy ansible-health status pull
+        dev-restart dev-rebuild decrypt-secrets ansible-deploy ansible-health status pull \
+        ci-integration-test
 
 # Default target
 help:
@@ -269,6 +270,9 @@ pull:
 #   ACCEPT_IMAGE       - pre-built image tag (ghcr.io/phona/ttpos-server-go:<tag>)
 #                        If not set, builds acceptance/mock-server/ locally.
 # ===========================================
+
+ci-integration-test: ## Contract tests: acceptance environment (requires Docker)
+	cd tests/integration && go test -tags=contract -v -timeout 300s ./...
 
 ACCEPT_DIR       := $(CURDIR)/acceptance
 ACCEPT_COMPOSE   := $(CURDIR)/docker-compose.accept.yml
